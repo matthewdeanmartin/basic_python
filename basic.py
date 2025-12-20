@@ -54,7 +54,7 @@ class Scanner:
     Acts as the equivalent of the 'char **p' pointer in the C code.
     """
 
-    def __init__(self, text: str):
+    def __init__(self, text: str)->None:
         self.text = text
         self.pos = 0
         self.length = len(text)
@@ -103,7 +103,7 @@ class Scanner:
 # --- The Interpreter ---
 
 class BasicInterpreter:
-    def __init__(self):
+    def __init__(self)->None:
         self.lines: List[Line] = []
         self.vars: Dict[str, Any] = {}  # Scalar variables
         self.arrays: Dict[str, List[Any]] = {}  # Array variables
@@ -608,7 +608,7 @@ class BasicInterpreter:
 
         sys.stdout.flush()
 
-    def _stmt_input(self):
+    def _stmt_input(self)->None:
         self.scanner.skip_spaces()
         prompt = "? "
 

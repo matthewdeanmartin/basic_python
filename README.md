@@ -121,3 +121,11 @@ This interpreter implements a subset of BASIC v2 compatible commands.
 1. **Variable Truncation:** `COUNT` and `COST` are the same variable (`CO`).
 2. **Array Default:** Using an array without `DIM` creates it with size 11 (indices 0-10).
 3. **Line Numbers:** Programs must use integer line numbers.
+
+
+## Prior Art
+
+- https://github.com/pahandav/basic-wrangler/tree/master
+- https://github.com/richpl/PyBasic
+- https://www.youtube.com/watch?v=hK2OxjhH3dw&start=0
+- https://zserge.com/posts/langs-basic/

@@ -129,3 +129,5 @@ This interpreter implements a subset of BASIC v2 compatible commands.
 - https://github.com/richpl/PyBasic
 - https://www.youtube.com/watch?v=hK2OxjhH3dw&start=0
 - https://zserge.com/posts/langs-basic/
+- https://github.com/maksimKorzh/BASIC/blob/main/tutorial/part7/basic.py
+- and corresponding youtube video: https://www.youtube.com/watch?v=WShuQV1XjVM

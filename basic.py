@@ -107,6 +107,7 @@ class BasicInterpreter:
         self.lines: List[Line] = []
         self.vars: Dict[str, Any] = {}  # Scalar variables
         self.arrays: Dict[str, List[Any]] = {}  # Array variables
+        self.labels: Dict[str, int] = {} # Label -> line index
 
         self.gosub_stack: List[GosubFrame] = []
         self.for_stack: List[ForFrame] = []
@@ -118,6 +119,9 @@ class BasicInterpreter:
 
     def load_program_from_file(self, filepath: str):
         try:
+            next_auto_line = 10000
+            self.lines = []
+            self.labels = {}
             with open(filepath, 'r', encoding='utf-8-sig') as f:
                 for raw_line in f:
                     raw_line = raw_line.strip()
@@ -126,15 +130,28 @@ class BasicInterpreter:
 
                     # Split into line number and text
                     match = re.match(r'^(\d+)\s*(.*)', raw_line)
-                    if not match:
-                        continue
-
-                    num = int(match.group(1))
-                    text = match.group(2)
+                    if match:
+                        num = int(match.group(1))
+                        text = match.group(2)
+                    else:
+                        num = next_auto_line
+                        text = raw_line
+                        next_auto_line += 1
+                        
                     self._add_line(num, text)
 
             # Sort lines by number
             self.lines.sort(key=lambda x: x.number)
+
+            # Scan for labels
+            for i, line in enumerate(self.lines):
+                # A label is an identifier followed by a colon at the start of the line text
+                label_match = re.match(r'^([A-Za-z][A-Za-z0-9_]*):', line.text)
+                if label_match:
+                    label_name = label_match.group(1).upper()
+                    self.labels[label_name] = i
+                    # Remove label from line text to simplify execution
+                    line.text = line.text[len(label_match.group(0)):].strip()
 
         except FileNotFoundError:
             print(f"Error: Cannot open {filepath}")
@@ -152,14 +169,12 @@ class BasicInterpreter:
         self.print_col = 0
 
         while not self.halted and 0 <= self.current_line_index < len(self.lines):
-            # precise logic to handle multi-statement lines (colon separated)
             if self.scanner is None:
                 line_obj = self.lines[self.current_line_index]
                 self.scanner = Scanner(line_obj.text)
 
             self.scanner.skip_spaces()
             if self.scanner.peek() == "":
-                # End of line, move to next
                 self.current_line_index += 1
                 self.scanner = None
                 continue
@@ -169,7 +184,6 @@ class BasicInterpreter:
             if self.halted:
                 break
 
-            # If scanner is still active, check for separator or end
             if self.scanner:
                 self.scanner.skip_spaces()
                 char = self.scanner.peek()
@@ -180,11 +194,8 @@ class BasicInterpreter:
                     self.current_line_index += 1
                     self.scanner = None
                 else:
-                    # Trailing junk or implicit execution?
-                    # The C code usually stops or moves next.
-                    # We'll assume move next line if not a separator.
-                    self.current_line_index += 1
-                    self.scanner = None
+                    # Continue execution if there's more on the line (e.g. after IF...THEN)
+                    pass
 
     def _error(self, message: str):
         print(f"\nError: {message}")
@@ -195,23 +206,10 @@ class BasicInterpreter:
 
     def _normalize_name(self, name: str) -> Tuple[str, bool]:
         """
-        CBM BASIC v2 limits variable names to 2 characters + type suffix.
-        Returns (Key, IsString)
+        Normalize variable names to uppercase for case-insensitivity.
         """
         is_string = name.endswith('$')
-        clean_name = name[:-1] if is_string else name
-
-        # Take first 2 chars, uppercase
-        if len(clean_name) >= 2:
-            key = clean_name[:2].upper()
-        elif len(clean_name) == 1:
-            key = clean_name[0].upper() + " "
-        else:
-            return "", False  # Should not happen
-
-        if is_string:
-            key += "$"
-
+        key = name.upper()
         return key, is_string
 
     def _get_var_ref(self) -> Tuple[str, bool, int]:
@@ -223,7 +221,7 @@ class BasicInterpreter:
         if not self.scanner: raise BasicRuntimeError("Scanner error")
 
         self.scanner.skip_spaces()
-        match = re.match(r'^[A-Za-z][A-Za-z0-9]*\$?', self.scanner.remaining())
+        match = re.match(r'^[A-Za-z][A-Za-z0-9_]*\$?', self.scanner.remaining())
         if not match:
             self._error("Expected variable")
             return "", False, 0
@@ -581,25 +579,31 @@ class BasicInterpreter:
             out_str = ""
             if isinstance(val, float):
                 if val == int(val):
-                    out_str = f" {int(val)} "
+                    out_str = str(int(val))
                 else:
-                    out_str = f" {val} "
+                    out_str = str(val)
+                # BASIC usually puts a space before and after numbers
+                out_str = " " + out_str + " "
             else:
                 out_str = str(val)
 
             print(out_str, end='')
+            self.print_col += len(out_str)
 
-            # Update column (handling potential newlines inside strings)
-            lines = out_str.split('\n')
-            if len(lines) > 1:
-                self.print_col = len(lines[-1])
-            else:
-                self.print_col += len(lines[0])
-
-            if self.print_col >= PRINT_WIDTH:
-                print()
-                self.print_col = 0
-
+            # Check if there's more to print on this line
+            self.scanner.skip_spaces()
+            char = self.scanner.peek()
+            
+            # If the next thing is another expression (not ; or , or : or end), 
+            # we should add a space.
+            if char != "" and char not in (';', ',', ':', '"', '-', '+') and not char.isdigit() and not char.isalpha():
+                # This is a bit complex for a one-pass scanner. 
+                # Let's simplify: Most BASICs require ; or , between PRINT items.
+                # If they are missing, it's often a syntax error, but some allow it.
+                # To keep it simple and fix tests, let's just NOT add automatic spaces
+                # and let the user use ; or , or spaces in strings.
+                pass
+            
             newline = True
 
         if newline:
@@ -697,17 +701,26 @@ class BasicInterpreter:
 
     def _stmt_goto(self):
         self.scanner.skip_spaces()
+        # Check if it's a number
         match = re.match(r'^\d+', self.scanner.remaining())
-        if not match:
-            self._error("Expected line number")
-            return
-
-        target = int(match.group(0))
-        self.scanner.advance(len(match.group(0)))
-
-        idx = self._find_line(target)
-        if idx == -1:
-            self._error(f"Line {target} not found")
+        if match:
+            target = int(match.group(0))
+            self.scanner.advance(len(match.group(0)))
+            idx = self._find_line(target)
+            if idx == -1:
+                self._error(f"Line {target} not found")
+        else:
+            # Check if it's a label
+            match = re.match(r'^[A-Za-z][A-Za-z0-9_]*', self.scanner.remaining())
+            if match:
+                label = match.group(0).upper()
+                self.scanner.advance(len(match.group(0)))
+                if label not in self.labels:
+                    self._error(f"Label {label} not found")
+                idx = self.labels[label]
+            else:
+                self._error("Expected line number or label")
+                return
 
         self.current_line_index = idx
         self.scanner = None  # Reset scanner to force load of new line
@@ -715,16 +728,23 @@ class BasicInterpreter:
     def _stmt_gosub(self):
         self.scanner.skip_spaces()
         match = re.match(r'^\d+', self.scanner.remaining())
-        if not match:
-            self._error("Expected line number")
-            return
-
-        target = int(match.group(0))
-        self.scanner.advance(len(match.group(0)))
-
-        idx = self._find_line(target)
-        if idx == -1:
-            self._error(f"Line {target} not found")
+        if match:
+            target = int(match.group(0))
+            self.scanner.advance(len(match.group(0)))
+            idx = self._find_line(target)
+            if idx == -1:
+                self._error(f"Line {target} not found")
+        else:
+            match = re.match(r'^[A-Za-z][A-Za-z0-9_]*', self.scanner.remaining())
+            if match:
+                label = match.group(0).upper()
+                self.scanner.advance(len(match.group(0)))
+                if label not in self.labels:
+                    self._error(f"Label {label} not found")
+                idx = self.labels[label]
+            else:
+                self._error("Expected line number or label")
+                return
 
         # Push return address
         frame = GosubFrame(self.current_line_index, self.scanner.pos)
@@ -807,7 +827,7 @@ class BasicInterpreter:
             # Peek at the name without fully consuming via _get_var_ref to verify it matches
             # But strictly, we can just look at top of stack
             # Let's read it to be safe
-            match = re.match(r'^[A-Za-z][A-Za-z0-9]*', self.scanner.remaining())
+            match = re.match(r'^[A-Za-z][A-Za-z0-9_]*', self.scanner.remaining())
             if match:
                 raw = match.group(0)
                 self.scanner.advance(len(raw))
@@ -855,7 +875,7 @@ class BasicInterpreter:
     def _stmt_dim(self):
         while True:
             self.scanner.skip_spaces()
-            match = re.match(r'^[A-Za-z][A-Za-z0-9]*\$?', self.scanner.remaining())
+            match = re.match(r'^[A-Za-z][A-Za-z0-9_]*\$?', self.scanner.remaining())
             if not match: self._error("Expected array name")
 
             raw_name = match.group(0)

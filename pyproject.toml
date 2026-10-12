@@ -22,3 +22,6 @@ py-modules = ["basic", "atari_basic"]
 
 [tool.uv.pip]
 universal = true
+
+[tool.ruff.lint]
+ignore = ["RUF100"]  # unused noqa differs across Python versions
